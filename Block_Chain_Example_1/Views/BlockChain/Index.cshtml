@@ -1,0 +1,437 @@
+﻿@model IEnumerable<Block_Chain_Example_1.Models.Block>
+
+@{
+    ViewData["Title"] = "Index";
+    int? firstInvalidIndex = ViewBag.FirstInvalidIndex as int?;
+}
+
+@{
+    ViewData["Title"] = "Index";
+
+    var balances = ViewBag.Balances as Dictionary<string, decimal>;
+    var nodeId = ViewBag.NodeId as string ?? "A";
+    var nides = ViewBag.Nodes as List<string> ?? new List<string>();
+
+	var lastBlockIndex = ViewBag.LastBlockIndex as int? ?? 0;
+}
+
+@{
+    string bgColor = nodeId switch
+    {
+        "A" => "#d4edda", // зелений
+        "B" => "#d1ecf1", // блакитний
+        "C" => "#dedc66", // жовтий
+        _ => "#ffffff"    // білий
+    };
+}
+
+<div style="display:flex; flex-direction:row">
+    <textarea id="privateKeyBox" rows="4">@ViewBag.PrivateKey</textarea>
+    <textarea rows="4">Public key => @ViewBag.PublicKey</textarea>
+    <div style="margin-left: 20px;">
+        <h6>Valid Chain => @ViewBag.Valid</h6>
+        <h6>Difficulty => @ViewBag.Difficulty</h6>
+        <h6>Reward => @ViewBag.CurrentReward</h6>
+    </div>
+</div>
+<input type="button" value="Копіювати ключ" onclick="copyPrivateKey()" />
+
+
+<div style="background-color:@bgColor; padding:10px; border-radius:6px;">
+    <form method="get" asp-action="Index" style="display: inline-block">
+        <label>Поточний вузол:</label>
+        <select name="nodeId">
+            @foreach (var n in nides)
+            {
+                if (n == nodeId)
+                {
+                    <option selected="selected" value="@n">Node @n</option>
+                }
+                else
+                {
+                    <option value="@n">Node @n</option>
+			        }
+            }
+        </select>
+        <input type="submit" value="Переключити" />
+    </form>
+</div>
+
+
+<hr />
+
+<div style="display:flex; flex-direction:row; margin:20px">
+    <form method="post" asp-action="DemoSetup" style="margin:20px">
+        <input type="hidden" name="nodeId" value="@nodeId"/>
+        <input type="submit" value="START DEMO" />
+    </form>
+
+    <form method="post" asp-action="MinePending" style="margin:20px" onsubmit="return disableMineButton()">
+        <input type="hidden" name="nodeId" value="@nodeId" />
+        <input type="text" name="privateKey" placeholder="Введіть приватний ключ" value="@ViewBag.PrivateKey" onkeydown="return event.key !== 'Enter';" />
+        <input type="submit" value="START MINE" id="mineButton" />
+    </form>
+
+    <form method="post" asp-action="SetDifficulty" style="margin:20px">
+        <input type="hidden" name="nodeId" value="@nodeId" />
+        <input type="number" name="difficulty" step="1" min="1" max="10" placeholder="Difficulty" />
+        <input type="submit" value="Задати" />
+    </form>
+</div>
+
+<span id="miningStatus" style="margin-left:10px; font-weight:bold;"></span>
+
+@* Результат розповсюдження останнього блоку серед нодів *@
+@if (TempData["Info"] != null)
+{
+    <div style="background-color:@bgColor; padding:10px; margin-top:10px; border-radius:6px; border:1px solid #ccc;">
+        @TempData["Info"]
+    </div>
+}
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert-danger">@TempData["Error"]</div>
+}
+
+
+<hr />
+
+@{
+    var mempool = ViewBag.Mempool as List<Transaction>;
+    var wallet = ViewBag.Wallets as List<Wallet>;
+}
+
+<div>
+    <h3>Register Wallet</h3>
+    <form method="post" asp-action="RegisterWallet">
+        <input type="hidden" name="nodeId" value="@nodeId" />
+        <input type="text" name="displayName" placeholder="Введіть ім'я власника гаманця" />
+        <input type="text" name="publicKeyXml" placeholder="Введіть Public Key XML" />
+        <input type="submit" value="Register Wallet" />
+    </form>
+</div>
+
+<div>
+    @if (wallet.Count > 0)
+    {
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Address</th>
+                    <th>CopyAddress</th>
+                    <th>Name</th>
+                    <th>Amount</th>
+                    <th>PublicKey</th>
+                    <th>RegisteredAt</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var w in wallet)
+                {
+                    <tr>
+                        <td>
+                            <button type="button" class="btn btn-link p-0" onclick="toggleWalletTx('@w.Address')">
+                                @w.Address
+                            </button>
+                        </td>
+                        <td>
+                            <input type="button" value="Copy addr" onclick="copyWalletAddress('@w.Address')" />
+                        </td>
+                        <td>@w.DisplayName</td>
+                        @if (balances.ContainsKey(w.Address))
+                        {
+                            <td>@ViewBag.Balances[w.Address]</td>
+						}
+                        else
+                        {
+							<td>0</td>
+						}
+                        <td>@w.PublicKeyXml.Substring(0, 10)</td>
+                        <td>@w.RegisteredAt.ToString("u")</td>
+                    </tr>
+
+
+                    // відображую транзакції, пов'язані з гаманцем
+                    <tr id="walletTxRow-@w.Address" style="display:none;">
+                        <td colspan="6">
+                            @{
+                                var relatedTxs = Model
+                                .SelectMany(b => b.Transactions.Select(tx => new { tx, BlockIndex = b.Index }))
+                                .Where(x => x.tx.FromAddress == w.Address || x.tx.ToAddress == w.Address)
+                                .ToList();
+                            }
+
+                            @if (relatedTxs.Count > 0)
+                            {
+                                <table class="table table-sm table-bordered">
+                                    <thead>
+                                        <tr>
+                                            <th>From</th>
+                                            <th>To</th>
+                                            <th>Amount</th>
+                                            <th>Fee</th>
+                                            <th>Note</th>
+                                            <th>Confirmations</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var tx in relatedTxs)
+                                        {
+                                            var isCoinbase = tx.tx.FromAddress == "COINBASE";
+                                            var conf = lastBlockIndex - tx.BlockIndex;
+                                            var confClass = conf < 6 ? "text-danger fw-bold" : "text-success fw-bold";
+                                            <tr style="@(isCoinbase ? "background-color:#e6ffe6;" : "")">
+                                                <td>@tx.tx.FromAddress</td>
+                                                <td>@tx.tx.ToAddress</td>
+                                                <td>@tx.tx.Amount</td>
+                                                <td>@tx.tx.Fee</td>
+                                                <td>@tx.tx.Note</td>
+                                                <td>
+                                                    @if (!isCoinbase)
+                                                    {
+                                                        <span class="@confClass">@conf</span>
+                                                    }
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            }
+                            else
+                            {
+                                <p>Транзакцій немає</p>
+                            }
+                        </td>
+                    </tr>
+
+                }
+            </tbody>
+        </table>
+    }
+    else
+    {
+        <p>Гаманців немає</p>
+    }
+</div>
+
+<hr />
+
+<h3>Mem pool</h3>
+<form method="post" asp-action="CreateTransaction" style="margin:15px">
+    <input type="hidden" name="nodeId" value="@nodeId" />
+    <input name="fromAddress" type="text" placeholder="From Address (ADDR_...)" />
+    <input name="toAddress" type="text" placeholder="To Address (ADDR_...)" />
+    <input name="amount" type="number" placeholder="Amount" />
+    <input name="fee" type="number" placeholder="Fee" />
+    <input name="privateKey" type="text" placeholder="Private key" />
+    <input name="note" type="text" placeholder="note" />
+    <input type="submit" value="Додати у мемпул" />
+</form>
+<div>
+    @if (mempool.Count > 0)
+    {
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>From Address</th>
+                    <th>To Address</th>
+                    <th>Amount</th>
+                    <th>Fee</th>
+                    <th>Note</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var m in mempool)
+                {
+                    <tr>
+                        <td>@m.FromAddress</td>
+                        <td>@m.ToAddress</td>
+                        <td>@m.Amount</td>
+                        <td>@m.Fee</td>
+                        <td>@m.Note</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+    else
+    {
+        <p>Транзакцій немає</p>
+    }
+</div>
+
+@* ================================== *@
+@* Повідомлення про успіх або помилку при додаванні до мейнпулу *@
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert-danger">@TempData["Error"]</div>
+}
+
+<hr />
+
+
+@* ================================== *@
+@* Інформаційний блок *@
+@if (ViewBag.Valid == false)
+{
+    <p class="text-danger"><strong>Порушено цілісність ланцюга блоків.</strong></p>
+}
+
+
+@* ================================== *@
+@* ТАБЛИЦЯ блоків *@
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr>
+            <th>@Html.DisplayNameFor(model => model.Index)</th>
+            <th>@Html.DisplayNameFor(model => model.Nonce)</th>
+            <th>@Html.DisplayNameFor(model => model.MiningDurationMs)</th>
+            <th>@Html.DisplayNameFor(model => model.PrevHash)</th>
+            <th>@Html.DisplayNameFor(model => model.Hash)</th>
+            <th>@Html.DisplayNameFor(model => model.Timestamp)</th>
+            <th>@Html.DisplayNameFor(model => model.Signature)</th>
+            <th>Статус підпису</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var item in Model)
+        {
+            string rowClass = "";
+
+            @if (firstInvalidIndex.HasValue)
+            {
+                if (item.Index < firstInvalidIndex.Value)
+                {
+                    rowClass = "table-success";
+                }
+                else
+                {
+                    rowClass = "table-danger";
+                }
+            }
+
+            <tr class="@rowClass">
+                <td>@item.Index</td>
+                <td>@item.Nonce</td>
+                <td>@item.MiningDurationMs</td>
+                <td>@(item.PrevHash.Length > 12 ? item.PrevHash.Substring(0, 12) + "..." : item.PrevHash)</td>
+                <td>@(item.Hash.Length > 12 ? item.Hash.Substring(0, 12) + "..." : item.Hash)</td>
+                <td>
+                    @item.Timestamp.ToString("dd MMMM yyyy 'р.', HH:mm:ss", new System.Globalization.CultureInfo("uk-UA"))
+                </td>
+                <td>
+                    @(string.IsNullOrEmpty(item.Signature)
+                                    ? " "
+                                    : (item.Signature.Length > 12 ? item.Signature.Substring(0, 12) + "..." : item.Signature))
+                </td>
+                <td>@(item.Verify() ? "валідний" : "невалідний")</td>
+                <td>
+                    <a asp-action="Edit" asp-route-id="@item.Index" class="btn btn-sm btn-warning me-1">Edit</a>
+                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="toggleTransactions(@item.Index)">Транзакції</button>
+                </td>
+            </tr>
+
+            <tr id="txRow-@item.Index" style="display:none;">
+                <td colspan="9">
+                @if (item.Transactions != null && item.Transactions.Count > 0)
+                    {
+                        <table class="table table-sm table-bordered">
+                            <thead>
+                                <tr>
+                                    <th>FromAddress</th>
+                                    <th>ToAddress</th>
+                                    <th>Amount</th>
+                                    <th>Fee</th>
+                                    <th>Note</th>
+                                    <th>Confirmations</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var tx in item.Transactions)
+                                {
+                                    var isCoinbase = tx.FromAddress == "COINBASE";
+                                    var rowStyle = isCoinbase ? "background-color:#e6ffe6;" : "";
+                                    <tr style="@rowStyle">
+                                        <td>@tx.FromAddress</td>
+                                        <td>@tx.ToAddress</td>
+                                        <td>@tx.Amount</td>
+                                        <td>@tx.Fee</td>
+                                        <td>@tx.Note</td>
+                                        <td>
+                                            @if (!isCoinbase)
+                                            {
+                                                <span class="fw-bold @(lastBlockIndex - item.Index < 6 ? "text-danger" : "text-success")">
+                                                    @(lastBlockIndex - item.Index)
+                                                </span>
+                                            }
+                                        </td>
+
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else
+                    {
+                        <p>Транзакцій немає</p>
+                    }
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<script>
+	// кнопка для копіювання приватного ключа в буфер обміну
+    function copyPrivateKey() {
+        const textarea = document.getElementById("privateKeyBox");
+        textarea.select();
+        document.execCommand("copy");
+    }
+    
+    // роблю неактивною кнопку "START MANE" під час майнінгу, щоб не можливо було нажати двічі
+    function disableMineButton() {
+        const btn = document.getElementById("mineButton");
+        const status = document.getElementById("miningStatus");
+
+        // Захист від повторного виклику
+        if (btn.disabled) return false;
+
+        btn.disabled = true;
+        btn.value = "Майнінг...";
+        status.textContent = "⏳ Виконується майнінг, зачекайте...";
+
+        return true; // дозволяє надсилання форми
+    }
+
+	// показую або приховую транзакції у блоці
+    function toggleTransactions(index) {
+        const row = document.getElementById("txRow-" + index);
+        if (row.style.display === "none") {
+            row.style.display = "table-row";
+        } else {
+            row.style.display = "none";
+        }
+    }
+
+	// кнопка для копіювання адреси гаманця в буфер обміну
+    function copyWalletAddress(address) {
+        const tempInput = document.createElement("input");
+        tempInput.value = address;
+        document.body.appendChild(tempInput);
+        tempInput.select();
+        document.execCommand("copy");
+        document.body.removeChild(tempInput);
+    }
+
+    // відображую транзакції пов'язані з гаманцем
+    function toggleWalletTx(address) {
+        const row = document.getElementById("walletTxRow-" + address);
+        if (row.style.display === "none" || row.style.display === "") {
+            row.style.display = "table-row";
+        } else {
+            row.style.display = "none";
+        }
+    }
+</script>
